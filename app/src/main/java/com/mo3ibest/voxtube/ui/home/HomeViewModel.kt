@@ -4,6 +4,7 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mo3ibest.voxtube.BuildConfig
 import com.mo3ibest.voxtube.data.api.YouTubeApi
 import com.mo3ibest.voxtube.data.model.Video
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,15 +25,18 @@ class HomeViewModel @Inject constructor(
     private val _error = MutableLiveData<String?>()
     val error: LiveData<String?> = _error
 
-    companion object {
-        const val API_KEY = "YOUR_YOUTUBE_API_KEY"
-    }
+    private val apiKey: String
+        get() = BuildConfig.YOUTUBE_API_KEY
 
     fun loadTrendingVideos() {
+        if (apiKey.isBlank()) {
+            _error.value = "YOUTUBE_API_KEY تنظیم نشده. در CI یا gradle.properties مقدار بده."
+            return
+        }
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                val response = youTubeApi.getVideos(apiKey = API_KEY)
+                val response = youTubeApi.getVideos(apiKey = apiKey)
                 if (response.isSuccessful) {
                     val videos = response.body()?.items?.map { item ->
                         Video(
@@ -48,7 +52,7 @@ class HomeViewModel @Inject constructor(
                     } ?: emptyList()
                     _videos.value = videos
                 } else {
-                    _error.value = "خطا در دریافت ویدیوها"
+                    _error.value = "خطا در دریافت ویدیوها (${response.code()})"
                 }
             } catch (e: Exception) {
                 _error.value = "خطای شبکه: ${e.message}"
@@ -59,10 +63,14 @@ class HomeViewModel @Inject constructor(
     }
 
     fun searchVideos(query: String) {
+        if (apiKey.isBlank()) {
+            _error.value = "YOUTUBE_API_KEY تنظیم نشده"
+            return
+        }
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                val response = youTubeApi.searchVideos(query = query, apiKey = API_KEY)
+                val response = youTubeApi.searchVideos(query = query, apiKey = apiKey)
                 if (response.isSuccessful) {
                     val videos = response.body()?.items?.map { item ->
                         Video(
@@ -77,7 +85,7 @@ class HomeViewModel @Inject constructor(
                     } ?: emptyList()
                     _videos.value = videos
                 } else {
-                    _error.value = "خطا در جستجو"
+                    _error.value = "خطا در جستجو (${response.code()})"
                 }
             } catch (e: Exception) {
                 _error.value = "خطای شبکه: ${e.message}"

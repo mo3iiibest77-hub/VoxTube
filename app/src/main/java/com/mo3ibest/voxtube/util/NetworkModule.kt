@@ -1,5 +1,6 @@
 package com.mo3ibest.voxtube.util
 
+import com.mo3ibest.voxtube.BuildConfig
 import com.mo3ibest.voxtube.data.api.VoxTubeApi
 import com.mo3ibest.voxtube.data.api.YouTubeApi
 import dagger.Module
@@ -23,10 +24,15 @@ object NetworkModule {
     fun provideOkHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BODY
+                level = if (BuildConfig.DEBUG) {
+                    HttpLoggingInterceptor.Level.BODY
+                } else {
+                    HttpLoggingInterceptor.Level.NONE
+                }
             })
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
             .build()
     }
 
@@ -34,8 +40,11 @@ object NetworkModule {
     @Singleton
     @Named("voxtube")
     fun provideVoxTubeRetrofit(client: OkHttpClient): Retrofit {
+        val baseUrl = BuildConfig.BACKEND_BASE_URL.let {
+            if (it.endsWith("/")) it else "$it/"
+        }
         return Retrofit.Builder()
-            .baseUrl("http://YOUR_SERVER_IP:8000/")
+            .baseUrl(baseUrl)
             .client(client)
             .addConverterFactory(GsonConverterFactory.create())
             .build()

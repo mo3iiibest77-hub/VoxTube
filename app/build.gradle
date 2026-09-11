@@ -16,12 +16,21 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        // Override in CI / local.properties via -P flags or gradle.properties
+        buildConfigField "String", "BACKEND_BASE_URL",
+                "\"${project.findProperty('BACKEND_BASE_URL') ?: 'http://10.0.2.2:8000/' }\""
+        buildConfigField "String", "YOUTUBE_API_KEY",
+                "\"${project.findProperty('YOUTUBE_API_KEY') ?: ''}\""
     }
 
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            // Emulator can reach host machine backend at 10.0.2.2
         }
     }
 
@@ -70,17 +79,17 @@ dependencies {
     // Google Sign-In
     implementation 'com.google.android.gms:play-services-auth:21.2.0'
 
-    // YouTube Player
+    // YouTube Player (temporary until Media3 migration)
     implementation 'com.pierfrancescosoffritti.androidyoutubeplayer:core:12.1.0'
 
     // Glide
     implementation 'com.github.bumptech.glide:glide:4.16.0'
     kapt 'com.github.bumptech.glide:compiler:4.16.0'
 
-    // Lottie animations
+    // Lottie
     implementation 'com.airbnb.android:lottie:6.4.0'
 
-    // MediaPlayer for TTS audio
+    // Media
     implementation 'androidx.media:media:1.7.0'
 
     // Coroutines
