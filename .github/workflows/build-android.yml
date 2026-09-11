@@ -8,6 +8,8 @@ on:
       - 'build.gradle'
       - 'settings.gradle'
       - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
       - '.github/workflows/build-android.yml'
   workflow_dispatch:
 
@@ -26,17 +28,8 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-
-      - name: Make gradlew executable
-        run: |
-          if [ -f ./gradlew ]; then chmod +x ./gradlew; fi
-
-      - name: Generate Gradle Wrapper if missing
-        run: |
-          if [ ! -f ./gradlew ]; then
-            gradle wrapper --gradle-version 8.7
-            chmod +x ./gradlew
-          fi
+        with:
+          gradle-version: '8.7'
 
       - name: Assemble Debug APK
         env:
@@ -45,7 +38,7 @@ jobs:
         run: |
           BACKEND="${BACKEND_BASE_URL:-http://10.0.2.2:8000/}"
           YTKEY="${YOUTUBE_API_KEY:-}"
-          ./gradlew assembleDebug \
+          gradle assembleDebug \
             -PBACKEND_BASE_URL="$BACKEND" \
             -PYOUTUBE_API_KEY="$YTKEY" \
             --stacktrace
