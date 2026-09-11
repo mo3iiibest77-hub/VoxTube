@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VoxTube</string>
+    <string name="sign_in_with_google">ورود با گوگل</string>
+    <string name="dubbing_persian">دوبله فارسی</string>
+    <string name="stop_dubbing">متوقف کردن دوبله</string>
+    <string name="search_hint">جستجوی ویدیو…</string>
+    <string name="welcome_default">سلام</string>
+</resources>
