@@ -63,7 +63,6 @@ class MainActivity : AppCompatActivity() {
             override fun onQueryTextSubmit(query: String?): Boolean {
                 val q = query?.trim().orEmpty()
                 if (q.isEmpty()) return true
-                // If user pasted a YouTube URL in search, open player directly
                 val id = extractVideoId(q)
                 if (id != null) {
                     openFromVideoId(id)
@@ -78,7 +77,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupUrlPaste() {
         binding.btnOpenUrl.setOnClickListener {
-            // Prefer paste field; fall back to search bar (common UX mistake)
             val fromPaste = binding.etYoutubeUrl.text?.toString()?.trim().orEmpty()
             val fromSearch = binding.searchView.query?.toString()?.trim().orEmpty()
             val raw = when {
@@ -95,7 +93,6 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "لینک یوتیوب معتبر نیست", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            // Keep paste field in sync for next time
             if (fromPaste.isEmpty()) {
                 binding.etYoutubeUrl.setText(raw)
             }
@@ -119,12 +116,12 @@ class MainActivity : AppCompatActivity() {
     private fun extractVideoId(url: String): String? {
         val cleaned = url.trim()
         val patterns = listOf(
-            Pattern.compile("(?:youtube\.com/watch\\?v=)([0-9A-Za-z_-]{11})"),
-            Pattern.compile("(?:youtube\.com/shorts/)([0-9A-Za-z_-]{11})"),
-            Pattern.compile("(?:youtu\.be/)([0-9A-Za-z_-]{11})"),
-            Pattern.compile("(?:v=)([0-9A-Za-z_-]{11})"),
-            Pattern.compile("(?:embed/)([0-9A-Za-z_-]{11})"),
-            Pattern.compile("^([0-9A-Za-z_-]{11})$")
+            Pattern.compile("""(?:youtube\.com/watch\?v=)([0-9A-Za-z_-]{11})"""),
+            Pattern.compile("""(?:youtube\.com/shorts/)([0-9A-Za-z_-]{11})"""),
+            Pattern.compile("""(?:youtu\.be/)([0-9A-Za-z_-]{11})"""),
+            Pattern.compile("""(?:v=)([0-9A-Za-z_-]{11})"""),
+            Pattern.compile("""(?:embed/)([0-9A-Za-z_-]{11})"""),
+            Pattern.compile("""^([0-9A-Za-z_-]{11})$""")
         )
         for (p in patterns) {
             val m = p.matcher(cleaned)
