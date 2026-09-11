@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.mo3ibest.voxtube.data.api.VoxTubeApi
 import com.mo3ibest.voxtube.data.model.TTSRequest
 import com.mo3ibest.voxtube.data.model.TranscriptEntry
+import com.mo3ibest.voxtube.data.youtube.YouTubeCaptionFetcher
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -15,6 +16,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 data class DubChunk(
@@ -26,7 +28,8 @@ data class DubChunk(
 
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
-    private val voxTubeApi: VoxTubeApi
+    private val voxTubeApi: VoxTubeApi,
+    private val captionFetcher: YouTubeCaptionFetcher
 ) : ViewModel() {
 
     private val _dubbingStatus = MutableLiveData<String>()
@@ -46,7 +49,10 @@ class PlayerViewModel @Inject constructor(
         private const val MAX_CHUNKS_FOR_TEST = 8
     }
 
-    private fun mergeEntries(entries: List<TranscriptEntry>, maxWindowSec: Double = 12.0): List<Pair<String, Pair<Double, Double>>> {
+    private fun mergeEntries(
+        entries: List<TranscriptEntry>,
+        maxWindowSec: Double = 12.0
+    ): List<Pair<String, Pair<Double, Double>>> {
         if (entries.isEmpty()) return emptyList()
         val windows = mutableListOf<Pair<String, Pair<Double, Double>>>()
         val buf = StringBuilder()
@@ -82,13 +88,13 @@ class PlayerViewModel @Inject constructor(
             _error.value = null
             _chunks.value = null
             try {
-                _dubbingStatus.value = "در حال دریافت زیرنویس…"
-                val transcriptResponse = voxTubeApi.getTranscript(mapOf("url" to videoUrl))
-                if (!transcriptResponse.isSuccessful) {
-                    _error.value = "زیرنویس پیدا نشد (${transcriptResponse.code()}) — بک‌اند روشن است؟"
-                    return@launch
+                val videoId = YouTubeCaptionFetcher.extractVideoId(videoUrl)
+                    ?: throw IllegalStateException("شناسه ویدیو نامعتبر است")
+
+                _dubbingStatus.value = "دریافت زیرنویس از یوتیوب (گوشی)…"
+                val entries = withContext(Dispatchers.IO) {
+                    captionFetcher.fetch(videoId)
                 }
-                val entries = transcriptResponse.body()?.transcript.orEmpty()
                 if (entries.isEmpty()) {
                     _error.value = "زیرنویس خالی است"
                     return@launch
@@ -98,12 +104,12 @@ class PlayerViewModel @Inject constructor(
                 if (windows.size > MAX_CHUNKS_FOR_TEST) {
                     windows = windows.take(MAX_CHUNKS_FOR_TEST)
                     _dubbingStatus.value =
-                        "نسخه تست: فقط ${MAX_CHUNKS_FOR_TEST} بخش اول (~${MAX_CHUNKS_FOR_TEST * 12}ث)"
+                        "نسخه تست: فقط $MAX_CHUNKS_FOR_TEST بخش اول — سپس TTS…"
                 } else {
                     _dubbingStatus.value = "ساخت صدای فارسی برای ${windows.size} بخش…"
                 }
 
-                val semaphore = Semaphore(1) // sequential to reduce free-tier 429s
+                val semaphore = Semaphore(1)
                 val results = coroutineScope {
                     windows.mapIndexed { index, (text, range) ->
                         async(Dispatchers.IO) {
@@ -112,7 +118,8 @@ class PlayerViewModel @Inject constructor(
                                 val resp = voxTubeApi.textToSpeech(
                                     TTSRequest(text = truncated, voice = voice)
                                 )
-                                val audio = if (resp.isSuccessful) resp.body()?.audio_base64 else null
+                                val audio =
+                                    if (resp.isSuccessful) resp.body()?.audio_base64 else null
                                 DubChunk(
                                     text = truncated,
                                     startSec = range.first,
@@ -128,7 +135,8 @@ class PlayerViewModel @Inject constructor(
 
                 val ok = results.count { it.audioBase64 != null }
                 if (ok == 0) {
-                    _error.value = "هیچ بخش صوتی ساخته نشد — GEMINI_API_KEY روی سرور؟ /health را چک کن"
+                    _error.value =
+                        "هیچ بخش صوتی ساخته نشد — سرور /tts یا GEMINI_API_KEY را چک کن"
                     return@launch
                 }
 
