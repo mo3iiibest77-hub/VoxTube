@@ -1,46 +1,42 @@
 # VoxTube — Progress
 
-Last updated: 2026-09-11 (resources added)
+Last updated: 2026-09-11 (backend TTS fix)
 
 ## Current Status Snapshot
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Documentation | Done | `PROJECT_FOUNDATION.md` + this file |
-| Backend skeleton | ~60% | FastAPI `/transcript` + `/tts`; TTS needs verify |
-| Backend deploy workflow | Ready | SSH + Docker |
-| Android resources (`res/`) | **Added** | layouts + themes + strings + adaptive icons |
-| Android auth + home shell | Skeleton | Still needs real API keys / base URL |
-| Android player | Broken for goal | androidyoutubeplayer; no mute/sync |
-| Chunked synced TTS | Not implemented | |
-| APK build/sign Actions | Missing | |
-| Base URL / API keys | Placeholders | |
+| Documentation | Done | Foundation + Progress |
+| Backend | ~75% | `google-genai` SDK, fixed `/tts`, WAV wrap, `/health` |
+| Backend deploy workflow | Ready | Needs redeploy after this push |
+| Android resources | Done | layouts/themes/icons |
+| Android player | Still wrong stack | androidyoutubeplayer |
+| Chunked synced TTS | Not done | |
+| APK Actions | Missing | |
+| Config placeholders | Still present | `YOUR_SERVER_IP`, YouTube key |
 
 ## Completed
 
-- [x] Full repo audit
-- [x] Foundation + Progress docs in git
-- [x] Minimal `res/` so ViewBinding Activities can compile (auth / main / player / item_video)
-- [x] Adaptive launcher icons + theme + proguard stub
+- [x] Repo audit + architecture lock
+- [x] `PROJECT_FOUNDATION.md` + `PROGRESS.md`
+- [x] Android `res/` minimal set (compile-ready UI shell)
+- [x] Backend: switch `google-generativeai` → `google-genai`
+- [x] Backend: correct TTS call for `gemini-2.5-flash-preview-tts`
+- [x] Backend: PCM→WAV header for Android MediaPlayer
+- [x] Backend: voice validation, health endpoint, better errors
 
 ## Next steps (ordered)
 
-1. **Backend TTS verification + harden**
-   - Fix Gemini TTS client/model usage if broken
-   - Env-only API key, better errors
-2. **Config wiring**
-   - BuildConfig / secrets for backend base URL + YouTube API key
-3. **Media3 ExoPlayer migration**
-   - Mute original audio; timeline as clock
-4. **Chunked dubbing pipeline**
-   - Per-subtitle TTS + schedule on video position
-5. **GitHub Actions: assemble + sign APK**
-6. **E2E test on device**
+1. Wire Android `BuildConfig` for backend base URL + YouTube API key (no more hardcode)
+2. Migrate player to **Media3 ExoPlayer** (mute original audio)
+3. Chunked dubbing: transcript entries → sequential/parallel TTS → schedule by `start`
+4. GitHub Actions workflow: build + sign universal APK
+5. Device E2E test
 
 ## Session log
 
 ### 2026-09-11
-- Audit complete; architecture locked
-- Added foundation docs
-- Added Android resource tree required by existing Activities
-- Next: backend TTS fix + config, then player swap
+- Foundation docs
+- Android resources
+- Backend TTS rewritten for official `google-genai` + preview TTS model
+- Deploy workflow will rebuild container on next push to `backend/**` (this commit)
