@@ -6,7 +6,6 @@ from youtube_transcript_api._errors import (
     TranscriptsDisabled,
     NoTranscriptFound,
     VideoUnavailable,
-    CouldNotRetrieveTranscript,
 )
 from google import genai
 from google.genai import types
@@ -22,7 +21,7 @@ import tempfile
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voxtube")
 
-app = FastAPI(title="VoxTube Backend", version="0.2.3")
+app = FastAPI(title="VoxTube Backend", version="0.2.4")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,8 +33,9 @@ app.add_middleware(
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 TTS_MODEL = os.environ.get("TTS_MODEL", "gemini-2.5-flash-preview-tts")
 DEFAULT_VOICE = os.environ.get("TTS_VOICE", "Charon")
-# socks5h://127.0.0.1:1080  or  http://127.0.0.1:8082
 PROXY_URL = os.environ.get("PROXY_URL", "").strip()
+# Netscape cookies.txt path inside container, e.g. /data/youtube_cookies.txt
+COOKIES_FILE = os.environ.get("YOUTUBE_COOKIES_FILE", "").strip()
 
 VALID_VOICES = {
     "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
@@ -166,11 +166,9 @@ def fetch_via_api(video_id: str) -> list:
 
 
 def fetch_via_ytdlp(video_id: str) -> list:
-    """Fallback: yt-dlp can pull official/auto captions more reliably."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     env = os.environ.copy()
     if PROXY_URL:
-        # yt-dlp respects these
         env["ALL_PROXY"] = PROXY_URL
         env["HTTPS_PROXY"] = PROXY_URL
         env["HTTP_PROXY"] = PROXY_URL
@@ -195,32 +193,31 @@ def fetch_via_ytdlp(video_id: str) -> list:
         ]
         if PROXY_URL:
             cmd.extend(["--proxy", PROXY_URL])
+        if COOKIES_FILE and os.path.isfile(COOKIES_FILE):
+            cmd.extend(["--cookies", COOKIES_FILE])
+            logger.info("yt-dlp using cookies file %s", COOKIES_FILE)
+        else:
+            logger.warning("No YOUTUBE_COOKIES_FILE — YouTube may block as bot")
 
         try:
             proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=90,
-                env=env,
+                cmd, capture_output=True, text=True, timeout=120, env=env
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError("yt-dlp timeout")
 
         if proc.returncode != 0:
-            logger.warning("yt-dlp stderr: %s", proc.stderr[-800:] if proc.stderr else "")
-            raise RuntimeError(proc.stderr[-400:] if proc.stderr else "yt-dlp failed")
+            err = (proc.stderr or proc.stdout or "yt-dlp failed")[-600:]
+            logger.warning("yt-dlp stderr: %s", err)
+            raise RuntimeError(err)
 
-        # find any .vtt
         vtts = [f for f in os.listdir(td) if f.endswith(".vtt")]
         if not vtts:
-            # try json3
             jsons = [f for f in os.listdir(td) if "json" in f]
             if jsons:
                 return _parse_json3(os.path.join(td, jsons[0]))
             raise NoTranscriptFound(video_id)
 
-        # prefer fa then en
         vtts_sorted = sorted(
             vtts,
             key=lambda n: (0 if "fa" in n else 1 if "en" in n else 2, n),
@@ -233,7 +230,6 @@ def _parse_vtt(path: str) -> list:
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # simple WebVTT parser
     blocks = re.split(r"\n\n+", content)
     time_re = re.compile(
         r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})"
@@ -251,7 +247,6 @@ def _parse_vtt(path: str) -> list:
                 continue
             if ln.startswith("WEBVTT") or ln.isdigit() or ln.startswith("NOTE"):
                 continue
-            # strip tags
             clean = re.sub(r"<[^>]+>", "", ln).strip()
             if clean:
                 text_lines.append(clean)
@@ -270,7 +265,6 @@ def _parse_vtt(path: str) -> list:
             + int(m.group(8)) / 1000.0
         )
         text = " ".join(text_lines)
-        # skip duplicate consecutive
         if items and items[-1]["text"] == text:
             continue
         items.append({"text": text, "start": start, "duration": max(0.01, end - start)})
@@ -298,8 +292,6 @@ def _parse_json3(path: str) -> list:
 
 def fetch_transcript(video_id: str) -> list:
     last_err = None
-
-    # 1) youtube-transcript-api
     try:
         return fetch_via_api(video_id)
     except TranscriptsDisabled as e:
@@ -309,11 +301,17 @@ def fetch_transcript(video_id: str) -> list:
         last_err = e
         logger.warning("api failed: %s — trying yt-dlp", e)
 
-    # 2) yt-dlp fallback
     try:
         return fetch_via_ytdlp(video_id)
     except Exception as e:
         logger.warning("yt-dlp failed: %s", e)
+        msg = str(e)
+        if "not a bot" in msg.lower() or "cookies" in msg.lower():
+            raise RuntimeError(
+                "یوتیوب درخواست کوکی کرده. فایل cookies.txt را روی سرور بگذار "
+                "و YOUTUBE_COOKIES_FILE را ست کن. "
+                + msg[:200]
+            )
         if isinstance(last_err, TranscriptsDisabled):
             raise last_err
         raise RuntimeError(f"api={last_err}; ytdlp={e}")
@@ -323,10 +321,11 @@ def fetch_transcript(video_id: str) -> list:
 def root():
     return {
         "status": "VoxTube backend running",
-        "version": "0.2.3",
+        "version": "0.2.4",
         "tts_model": TTS_MODEL,
         "gemini_configured": bool(GEMINI_API_KEY),
         "proxy_configured": bool(PROXY_URL),
+        "cookies_configured": bool(COOKIES_FILE and os.path.isfile(COOKIES_FILE)),
     }
 
 
@@ -337,7 +336,8 @@ def health():
         "gemini_configured": bool(GEMINI_API_KEY),
         "proxy_configured": bool(PROXY_URL),
         "proxy_url": PROXY_URL or None,
-        "version": "0.2.3",
+        "cookies_configured": bool(COOKIES_FILE and os.path.isfile(COOKIES_FILE)),
+        "version": "0.2.4",
     }
 
 
