@@ -1,8 +1,13 @@
 package com.mo3ibest.voxtube.data.api
 
+import com.google.gson.JsonDeserializationContext
+import com.google.gson.JsonDeserializer
+import com.google.gson.JsonElement
+import com.google.gson.annotations.JsonAdapter
 import retrofit2.Response
 import retrofit2.http.GET
 import retrofit2.http.Query
+import java.lang.reflect.Type
 
 interface YouTubeApi {
     @GET("videos")
@@ -29,15 +34,41 @@ data class YouTubeResponse(
 )
 
 data class YouTubeItem(
+    @JsonAdapter(YouTubeItemIdDeserializer::class)
     val id: YouTubeItemId,
     val snippet: YouTubeSnippet,
     val statistics: YouTubeStatistics? = null
 )
 
+/**
+ * videos.list returns id as a plain string.
+ * search.list returns id as { kind, videoId }.
+ */
 data class YouTubeItemId(
-    val kind: String,
+    val kind: String = "",
     val videoId: String? = null
-)
+) {
+    fun resolvedId(): String = videoId?.takeIf { it.isNotBlank() } ?: kind
+}
+
+class YouTubeItemIdDeserializer : JsonDeserializer<YouTubeItemId> {
+    override fun deserialize(
+        json: JsonElement,
+        typeOfT: Type,
+        context: JsonDeserializationContext
+    ): YouTubeItemId {
+        return if (json.isJsonPrimitive) {
+            // videos.list → "id": "dQw4w9WgXcQ"
+            YouTubeItemId(kind = "youtube#video", videoId = json.asString)
+        } else {
+            val obj = json.asJsonObject
+            YouTubeItemId(
+                kind = obj.get("kind")?.asString ?: "",
+                videoId = obj.get("videoId")?.asString
+            )
+        }
+    }
+}
 
 data class YouTubeSnippet(
     val title: String,

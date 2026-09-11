@@ -40,7 +40,7 @@ class HomeViewModel @Inject constructor(
                 if (response.isSuccessful) {
                     val videos = response.body()?.items?.map { item ->
                         Video(
-                            id = item.id.videoId ?: item.id.kind,
+                            id = item.id.resolvedId(),
                             title = item.snippet.title,
                             description = item.snippet.description,
                             thumbnailUrl = item.snippet.thumbnails.high?.url
@@ -74,7 +74,7 @@ class HomeViewModel @Inject constructor(
                 if (response.isSuccessful) {
                     val videos = response.body()?.items?.map { item ->
                         Video(
-                            id = item.id.videoId ?: "",
+                            id = item.id.resolvedId(),
                             title = item.snippet.title,
                             description = item.snippet.description,
                             thumbnailUrl = item.snippet.thumbnails.high?.url
