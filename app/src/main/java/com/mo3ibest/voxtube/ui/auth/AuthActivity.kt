@@ -11,7 +11,6 @@ import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
-import com.mo3ibest.voxtube.R
 import com.mo3ibest.voxtube.databinding.ActivityAuthBinding
 import com.mo3ibest.voxtube.ui.home.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
@@ -20,7 +19,7 @@ import dagger.hilt.android.AndroidEntryPoint
 class AuthActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityAuthBinding
-    private lateinit var googleSignInClient: GoogleSignInClient
+    private var googleSignInClient: GoogleSignInClient? = null
 
     companion object {
         private const val RC_SIGN_IN = 1001
@@ -33,7 +32,11 @@ class AuthActivity : AppCompatActivity() {
 
         val account = GoogleSignIn.getLastSignedInAccount(this)
         if (account != null) {
-            goToMain(account)
+            goToMain(
+                name = account.displayName,
+                email = account.email,
+                photo = account.photoUrl?.toString()
+            )
             return
         }
 
@@ -42,23 +45,37 @@ class AuthActivity : AppCompatActivity() {
     }
 
     private fun setupGoogleSignIn() {
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestEmail()
-            .requestProfile()
-            .requestScopes(Scope("https://www.googleapis.com/auth/youtube.readonly"))
-            .build()
-        googleSignInClient = GoogleSignIn.getClient(this, gso)
+        try {
+            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestEmail()
+                .requestProfile()
+                .requestScopes(Scope("https://www.googleapis.com/auth/youtube.readonly"))
+                .build()
+            googleSignInClient = GoogleSignIn.getClient(this, gso)
+        } catch (e: Exception) {
+            // Google Play Services may be missing; skip still works
+            googleSignInClient = null
+        }
     }
 
     private fun setupClickListeners() {
         binding.btnSignIn.setOnClickListener {
+            val client = googleSignInClient
+            if (client == null) {
+                Toast.makeText(this, "گوگل ساین‌این در دسترس نیست — از ورود آزمایشی استفاده کن", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
             binding.progressBar.visibility = View.VISIBLE
             binding.btnSignIn.isEnabled = false
-            val signInIntent = googleSignInClient.signInIntent
-            startActivityForResult(signInIntent, RC_SIGN_IN)
+            startActivityForResult(client.signInIntent, RC_SIGN_IN)
+        }
+
+        binding.btnSkip.setOnClickListener {
+            goToMain(name = "کاربر تست", email = null, photo = null)
         }
     }
 
+    @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == RC_SIGN_IN) {
@@ -67,18 +84,22 @@ class AuthActivity : AppCompatActivity() {
             val task = GoogleSignIn.getSignedInAccountFromIntent(data)
             try {
                 val account = task.getResult(ApiException::class.java)
-                goToMain(account)
+                goToMain(
+                    name = account.displayName,
+                    email = account.email,
+                    photo = account.photoUrl?.toString()
+                )
             } catch (e: ApiException) {
-                Toast.makeText(this, "خطا در ورود: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "خطا در ورود: ${e.statusCode} — از ورود آزمایشی استفاده کن", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    private fun goToMain(account: GoogleSignInAccount) {
+    private fun goToMain(name: String?, email: String?, photo: String?) {
         val intent = Intent(this, MainActivity::class.java)
-        intent.putExtra("user_name", account.displayName)
-        intent.putExtra("user_email", account.email)
-        intent.putExtra("user_photo", account.photoUrl?.toString())
+        intent.putExtra("user_name", name ?: "کاربر")
+        intent.putExtra("user_email", email)
+        intent.putExtra("user_photo", photo)
         startActivity(intent)
         finish()
     }

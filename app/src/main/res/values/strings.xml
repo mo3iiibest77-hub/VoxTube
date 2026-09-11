@@ -2,8 +2,12 @@
 <resources>
     <string name="app_name">VoxTube</string>
     <string name="sign_in_with_google">ورود با گوگل</string>
+    <string name="skip_for_test">ورود آزمایشی (بدون گوگل)</string>
     <string name="dubbing_persian">دوبله فارسی</string>
     <string name="stop_dubbing">متوقف کردن دوبله</string>
     <string name="search_hint">جستجوی ویدیو…</string>
     <string name="welcome_default">سلام</string>
+    <string name="paste_url_hint">لینک یوتیوب را بچسبان…</string>
+    <string name="open_link">باز کردن لینک</string>
+    <string name="test_mode_hint">نسخه تست — لینک مستقیم یا سرچ</string>
 </resources>

@@ -9,11 +9,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SearchView
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.bumptech.glide.Glide
-import com.mo3ibest.voxtube.R
 import com.mo3ibest.voxtube.data.model.Video
 import com.mo3ibest.voxtube.databinding.ActivityMainBinding
 import com.mo3ibest.voxtube.ui.player.PlayerActivity
 import dagger.hilt.android.AndroidEntryPoint
+import java.util.regex.Pattern
 
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
@@ -30,6 +30,7 @@ class MainActivity : AppCompatActivity() {
         setupUI()
         setupRecyclerView()
         setupSearchView()
+        setupUrlPaste()
         setupObservers()
 
         viewModel.loadTrendingVideos()
@@ -50,9 +51,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupRecyclerView() {
-        videoAdapter = VideoAdapter { video ->
-            openPlayer(video)
-        }
+        videoAdapter = VideoAdapter { video -> openPlayer(video) }
         binding.rvVideos.apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
             adapter = videoAdapter
@@ -69,6 +68,44 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    private fun setupUrlPaste() {
+        binding.btnOpenUrl.setOnClickListener {
+            val raw = binding.etYoutubeUrl.text?.toString()?.trim().orEmpty()
+            if (raw.isEmpty()) {
+                Toast.makeText(this, "لینک را وارد کن", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val id = extractVideoId(raw)
+            if (id == null) {
+                Toast.makeText(this, "لینک یوتیوب معتبر نیست", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            openPlayer(
+                Video(
+                    id = id,
+                    title = "ویدیو ($id)",
+                    description = "",
+                    thumbnailUrl = "",
+                    channelTitle = "لینک مستقیم",
+                    publishedAt = ""
+                )
+            )
+        }
+    }
+
+    private fun extractVideoId(url: String): String? {
+        val patterns = listOf(
+            Pattern.compile("(?:v=|/)([0-9A-Za-z_-]{11}).*"),
+            Pattern.compile("(?:youtu\\.be/)([0-9A-Za-z_-]{11})"),
+            Pattern.compile("^([0-9A-Za-z_-]{11})$")
+        )
+        for (p in patterns) {
+            val m = p.matcher(url)
+            if (m.find()) return m.group(1)
+        }
+        return null
+    }
+
     private fun setupObservers() {
         viewModel.videos.observe(this) { videos ->
             videoAdapter.submitList(videos)
@@ -81,6 +118,7 @@ class MainActivity : AppCompatActivity() {
 
         viewModel.error.observe(this) { error ->
             error?.let {
+                // Non-blocking: user can still paste a URL
                 Toast.makeText(this, it, Toast.LENGTH_SHORT).show()
             }
         }
