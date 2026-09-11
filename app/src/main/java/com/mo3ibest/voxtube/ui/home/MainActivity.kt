@@ -61,7 +61,15 @@ class MainActivity : AppCompatActivity() {
     private fun setupSearchView() {
         binding.searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
             override fun onQueryTextSubmit(query: String?): Boolean {
-                query?.let { viewModel.searchVideos(it) }
+                val q = query?.trim().orEmpty()
+                if (q.isEmpty()) return true
+                // If user pasted a YouTube URL in search, open player directly
+                val id = extractVideoId(q)
+                if (id != null) {
+                    openFromVideoId(id)
+                    return true
+                }
+                viewModel.searchVideos(q)
                 return true
             }
             override fun onQueryTextChange(newText: String?) = false
@@ -70,9 +78,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupUrlPaste() {
         binding.btnOpenUrl.setOnClickListener {
-            val raw = binding.etYoutubeUrl.text?.toString()?.trim().orEmpty()
+            // Prefer paste field; fall back to search bar (common UX mistake)
+            val fromPaste = binding.etYoutubeUrl.text?.toString()?.trim().orEmpty()
+            val fromSearch = binding.searchView.query?.toString()?.trim().orEmpty()
+            val raw = when {
+                fromPaste.isNotEmpty() -> fromPaste
+                fromSearch.isNotEmpty() -> fromSearch
+                else -> ""
+            }
             if (raw.isEmpty()) {
-                Toast.makeText(this, "لینک را وارد کن", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "لینک را در کادر بالا بچسبان", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             val id = extractVideoId(raw)
@@ -80,27 +95,39 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "لینک یوتیوب معتبر نیست", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            openPlayer(
-                Video(
-                    id = id,
-                    title = "ویدیو ($id)",
-                    description = "",
-                    thumbnailUrl = "",
-                    channelTitle = "لینک مستقیم",
-                    publishedAt = ""
-                )
-            )
+            // Keep paste field in sync for next time
+            if (fromPaste.isEmpty()) {
+                binding.etYoutubeUrl.setText(raw)
+            }
+            openFromVideoId(id)
         }
     }
 
+    private fun openFromVideoId(id: String) {
+        openPlayer(
+            Video(
+                id = id,
+                title = "ویدیو ($id)",
+                description = "",
+                thumbnailUrl = "",
+                channelTitle = "لینک مستقیم",
+                publishedAt = ""
+            )
+        )
+    }
+
     private fun extractVideoId(url: String): String? {
+        val cleaned = url.trim()
         val patterns = listOf(
-            Pattern.compile("(?:v=|/)([0-9A-Za-z_-]{11}).*"),
-            Pattern.compile("(?:youtu\\.be/)([0-9A-Za-z_-]{11})"),
+            Pattern.compile("(?:youtube\.com/watch\\?v=)([0-9A-Za-z_-]{11})"),
+            Pattern.compile("(?:youtube\.com/shorts/)([0-9A-Za-z_-]{11})"),
+            Pattern.compile("(?:youtu\.be/)([0-9A-Za-z_-]{11})"),
+            Pattern.compile("(?:v=)([0-9A-Za-z_-]{11})"),
+            Pattern.compile("(?:embed/)([0-9A-Za-z_-]{11})"),
             Pattern.compile("^([0-9A-Za-z_-]{11})$")
         )
         for (p in patterns) {
-            val m = p.matcher(url)
+            val m = p.matcher(cleaned)
             if (m.find()) return m.group(1)
         }
         return null
@@ -118,7 +145,6 @@ class MainActivity : AppCompatActivity() {
 
         viewModel.error.observe(this) { error ->
             error?.let {
-                // Non-blocking: user can still paste a URL
                 Toast.makeText(this, it, Toast.LENGTH_SHORT).show()
             }
         }
