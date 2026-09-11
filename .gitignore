@@ -1,2 +1,19 @@
-PROJECT.md
-PROGRESS.md
+# Local / secret files
+*.keystore
+*.jks
+local.properties
+.env
+*.apk
+*.aab
+
+# Build
+.gradle/
+build/
+app/build/
+.idea/
+*.iml
+.DS_Store
+
+# Optional local notes (keep foundation + progress tracked)
+# PROJECT.md
+# PROGRESS.md
