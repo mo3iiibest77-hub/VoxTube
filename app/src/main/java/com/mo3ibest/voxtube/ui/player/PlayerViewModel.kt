@@ -41,10 +41,11 @@ class PlayerViewModel @Inject constructor(
     private val _isPreparing = MutableLiveData(false)
     val isPreparing: LiveData<Boolean> = _isPreparing
 
-    /**
-     * Merge short subtitle lines into ~8–12s windows to reduce TTS calls
-     * while keeping timing accurate enough for narration.
-     */
+    companion object {
+        /** Test build: only first N windows to protect free-tier Gemini quota */
+        private const val MAX_CHUNKS_FOR_TEST = 8
+    }
+
     private fun mergeEntries(entries: List<TranscriptEntry>, maxWindowSec: Double = 12.0): List<Pair<String, Pair<Double, Double>>> {
         if (entries.isEmpty()) return emptyList()
         val windows = mutableListOf<Pair<String, Pair<Double, Double>>>()
@@ -84,7 +85,7 @@ class PlayerViewModel @Inject constructor(
                 _dubbingStatus.value = "در حال دریافت زیرنویس…"
                 val transcriptResponse = voxTubeApi.getTranscript(mapOf("url" to videoUrl))
                 if (!transcriptResponse.isSuccessful) {
-                    _error.value = "زیرنویس پیدا نشد (${transcriptResponse.code()})"
+                    _error.value = "زیرنویس پیدا نشد (${transcriptResponse.code()}) — بک‌اند روشن است؟"
                     return@launch
                 }
                 val entries = transcriptResponse.body()?.transcript.orEmpty()
@@ -93,16 +94,21 @@ class PlayerViewModel @Inject constructor(
                     return@launch
                 }
 
-                val windows = mergeEntries(entries)
-                _dubbingStatus.value = "ساخت صدای فارسی برای ${windows.size} بخش…"
+                var windows = mergeEntries(entries)
+                if (windows.size > MAX_CHUNKS_FOR_TEST) {
+                    windows = windows.take(MAX_CHUNKS_FOR_TEST)
+                    _dubbingStatus.value =
+                        "نسخه تست: فقط ${MAX_CHUNKS_FOR_TEST} بخش اول (~${MAX_CHUNKS_FOR_TEST * 12}ث)"
+                } else {
+                    _dubbingStatus.value = "ساخت صدای فارسی برای ${windows.size} بخش…"
+                }
 
-                // Limit concurrent TTS to avoid free-tier rate limits
-                val semaphore = Semaphore(2)
+                val semaphore = Semaphore(1) // sequential to reduce free-tier 429s
                 val results = coroutineScope {
                     windows.mapIndexed { index, (text, range) ->
                         async(Dispatchers.IO) {
                             semaphore.withPermit {
-                                val truncated = if (text.length > 1500) text.take(1500) else text
+                                val truncated = if (text.length > 1200) text.take(1200) else text
                                 val resp = voxTubeApi.textToSpeech(
                                     TTSRequest(text = truncated, voice = voice)
                                 )
@@ -113,9 +119,7 @@ class PlayerViewModel @Inject constructor(
                                     endSec = range.second,
                                     audioBase64 = audio
                                 ).also {
-                                    _dubbingStatus.postValue(
-                                        "TTS ${index + 1}/${windows.size}…"
-                                    )
+                                    _dubbingStatus.postValue("TTS ${index + 1}/${windows.size}…")
                                 }
                             }
                         }
@@ -124,12 +128,12 @@ class PlayerViewModel @Inject constructor(
 
                 val ok = results.count { it.audioBase64 != null }
                 if (ok == 0) {
-                    _error.value = "هیچ بخش صوتی ساخته نشد"
+                    _error.value = "هیچ بخش صوتی ساخته نشد — GEMINI_API_KEY روی سرور؟ /health را چک کن"
                     return@launch
                 }
 
                 _chunks.value = results
-                _dubbingStatus.value = "آماده — $ok بخش صوتی. پخش همگام شروع می‌شود."
+                _dubbingStatus.value = "آماده — $ok بخش. پخش همگام شروع می‌شود."
             } catch (e: Exception) {
                 _error.value = "خطا: ${e.message}"
             } finally {
