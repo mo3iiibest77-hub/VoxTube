@@ -19,7 +19,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voxtube")
 
-app = FastAPI(title="VoxTube Backend", version="0.2.1")
+app = FastAPI(title="VoxTube Backend", version="0.2.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,6 +31,8 @@ app.add_middleware(
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 TTS_MODEL = os.environ.get("TTS_MODEL", "gemini-2.5-flash-preview-tts")
 DEFAULT_VOICE = os.environ.get("TTS_VOICE", "Charon")
+# e.g. socks5://127.0.0.1:1080  or  http://127.0.0.1:8080
+PROXY_URL = os.environ.get("PROXY_URL", "").strip()
 
 VALID_VOICES = {
     "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
@@ -39,6 +41,12 @@ VALID_VOICES = {
     "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
     "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
 }
+
+
+def get_proxies() -> dict | None:
+    if not PROXY_URL:
+        return None
+    return {"http": PROXY_URL, "https": PROXY_URL}
 
 
 def get_client() -> genai.Client:
@@ -95,7 +103,6 @@ def pcm_to_wav(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, sam
 
 
 def _entry_to_dict(entry) -> dict:
-    """Support both dict-style and object-style transcript entries."""
     if isinstance(entry, dict):
         return {
             "text": entry.get("text", ""),
@@ -110,12 +117,15 @@ def _entry_to_dict(entry) -> dict:
 
 
 def fetch_transcript(video_id: str) -> list:
-    """Try several strategies to get captions."""
     preferred = ["fa", "en", "en-US", "en-GB"]
+    proxies = get_proxies()
+    if proxies:
+        logger.info("Using proxy for YouTube transcript: %s", PROXY_URL)
 
-    # 1) Direct preferred languages
     try:
-        raw = YouTubeTranscriptApi.get_transcript(video_id, languages=preferred)
+        raw = YouTubeTranscriptApi.get_transcript(
+            video_id, languages=preferred, proxies=proxies
+        )
         items = [_entry_to_dict(e) for e in raw]
         if items:
             return items
@@ -126,10 +136,8 @@ def fetch_transcript(video_id: str) -> list:
     except Exception as e:
         logger.warning("get_transcript preferred failed: %s", e)
 
-    # 2) List all and pick best
     try:
-        listing = YouTubeTranscriptApi.list_transcripts(video_id)
-        # manual preferred first
+        listing = YouTubeTranscriptApi.list_transcripts(video_id, proxies=proxies)
         for code in preferred:
             try:
                 t = listing.find_transcript([code])
@@ -139,7 +147,6 @@ def fetch_transcript(video_id: str) -> list:
                     return items
             except Exception:
                 continue
-        # any generated/manual
         for t in listing:
             try:
                 raw = t.fetch()
@@ -147,7 +154,7 @@ def fetch_transcript(video_id: str) -> list:
                 if items:
                     return items
             except Exception as e:
-                logger.warning("fetch transcript %s failed: %s", getattr(t, "language_code", "?"), e)
+                logger.warning("fetch transcript failed: %s", e)
                 continue
     except TranscriptsDisabled:
         raise
@@ -162,15 +169,21 @@ def fetch_transcript(video_id: str) -> list:
 def root():
     return {
         "status": "VoxTube backend running",
-        "version": "0.2.1",
+        "version": "0.2.2",
         "tts_model": TTS_MODEL,
         "gemini_configured": bool(GEMINI_API_KEY),
+        "proxy_configured": bool(PROXY_URL),
     }
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "gemini_configured": bool(GEMINI_API_KEY)}
+    return {
+        "ok": True,
+        "gemini_configured": bool(GEMINI_API_KEY),
+        "proxy_configured": bool(PROXY_URL),
+        "proxy_url": PROXY_URL or None,
+    }
 
 
 @app.post("/transcript")
@@ -183,21 +196,15 @@ def get_transcript(req: TranscriptRequest):
     try:
         transcript = fetch_transcript(video_id)
     except TranscriptsDisabled:
-        raise HTTPException(
-            status_code=403,
-            detail="زیرنویس برای این ویدیو غیرفعال است",
-        )
+        raise HTTPException(status_code=403, detail="زیرنویس برای این ویدیو غیرفعال است")
     except NoTranscriptFound:
-        raise HTTPException(
-            status_code=404,
-            detail="زیرنویسی برای این ویدیو پیدا نشد",
-        )
+        raise HTTPException(status_code=404, detail="زیرنویسی برای این ویدیو پیدا نشد")
     except VideoUnavailable:
         raise HTTPException(status_code=404, detail="ویدیو در دسترس نیست")
     except CouldNotRetrieveTranscript as e:
         raise HTTPException(
             status_code=502,
-            detail=f"یوتیوب زیرنویس را برنگرداند (ممکن است IP سرور بلاک باشد): {e}",
+            detail=f"یوتیوب زیرنویس را برنگرداند: {e}",
         )
     except Exception as e:
         logger.exception("transcript failed")
@@ -205,14 +212,11 @@ def get_transcript(req: TranscriptRequest):
         if "no element found" in msg.lower() or "ParseError" in msg:
             raise HTTPException(
                 status_code=502,
-                detail="یوتیوب پاسخ خالی داد — IP سرور احتمالاً توسط یوتیوب محدود شده",
+                detail="یوتیوب پاسخ خالی داد — پروکسی را چک کن (PROXY_URL / سایفون)",
             )
         raise HTTPException(status_code=500, detail=msg)
 
-    return {
-        "video_id": video_id,
-        "transcript": transcript,
-    }
+    return {"video_id": video_id, "transcript": transcript}
 
 
 @app.post("/tts")

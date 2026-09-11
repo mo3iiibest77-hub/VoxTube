@@ -3,3 +3,5 @@ uvicorn==0.34.0
 youtube-transcript-api==0.6.3
 google-genai==1.14.0
 pydantic==2.10.4
+requests==2.32.3
+PySocks==1.7.1
