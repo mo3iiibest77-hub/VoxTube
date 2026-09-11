@@ -6,9 +6,23 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mo3ibest.voxtube.data.api.VoxTubeApi
 import com.mo3ibest.voxtube.data.model.TTSRequest
+import com.mo3ibest.voxtube.data.model.TranscriptEntry
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import javax.inject.Inject
+
+data class DubChunk(
+    val text: String,
+    val startSec: Double,
+    val endSec: Double,
+    val audioBase64: String?
+)
 
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
@@ -18,46 +32,115 @@ class PlayerViewModel @Inject constructor(
     private val _dubbingStatus = MutableLiveData<String>()
     val dubbingStatus: LiveData<String> = _dubbingStatus
 
-    private val _audioBase64 = MutableLiveData<String?>()
-    val audioBase64: LiveData<String?> = _audioBase64
+    private val _chunks = MutableLiveData<List<DubChunk>?>()
+    val chunks: LiveData<List<DubChunk>?> = _chunks
 
     private val _error = MutableLiveData<String?>()
     val error: LiveData<String?> = _error
 
-    fun startDubbing(videoUrl: String) {
+    private val _isPreparing = MutableLiveData(false)
+    val isPreparing: LiveData<Boolean> = _isPreparing
+
+    /**
+     * Merge short subtitle lines into ~8–12s windows to reduce TTS calls
+     * while keeping timing accurate enough for narration.
+     */
+    private fun mergeEntries(entries: List<TranscriptEntry>, maxWindowSec: Double = 12.0): List<Pair<String, Pair<Double, Double>>> {
+        if (entries.isEmpty()) return emptyList()
+        val windows = mutableListOf<Pair<String, Pair<Double, Double>>>()
+        val buf = StringBuilder()
+        var windowStart = entries.first().start
+        var windowEnd = entries.first().start + entries.first().duration
+
+        fun flush() {
+            val t = buf.toString().trim()
+            if (t.isNotEmpty()) {
+                windows += t to (windowStart to windowEnd)
+            }
+            buf.clear()
+        }
+
+        for (e in entries) {
+            val eEnd = e.start + e.duration
+            if (buf.isNotEmpty() && (eEnd - windowStart) > maxWindowSec) {
+                flush()
+                windowStart = e.start
+            }
+            if (buf.isEmpty()) windowStart = e.start
+            if (buf.isNotEmpty()) buf.append(' ')
+            buf.append(e.text.replace('\n', ' ').trim())
+            windowEnd = eEnd
+        }
+        flush()
+        return windows
+    }
+
+    fun startDubbing(videoUrl: String, voice: String = "Charon") {
         viewModelScope.launch {
+            _isPreparing.value = true
+            _error.value = null
+            _chunks.value = null
             try {
-                _dubbingStatus.value = "در حال دریافت متن ویدیو..."
+                _dubbingStatus.value = "در حال دریافت زیرنویس…"
                 val transcriptResponse = voxTubeApi.getTranscript(mapOf("url" to videoUrl))
-
                 if (!transcriptResponse.isSuccessful) {
-                    _error.value = "متن ویدیو پیدا نشد. این ویدیو subtitle داره؟"
+                    _error.value = "زیرنویس پیدا نشد (${transcriptResponse.code()})"
+                    return@launch
+                }
+                val entries = transcriptResponse.body()?.transcript.orEmpty()
+                if (entries.isEmpty()) {
+                    _error.value = "زیرنویس خالی است"
                     return@launch
                 }
 
-                val transcript = transcriptResponse.body()?.transcript ?: run {
-                    _error.value = "متن خالی دریافت شد"
+                val windows = mergeEntries(entries)
+                _dubbingStatus.value = "ساخت صدای فارسی برای ${windows.size} بخش…"
+
+                // Limit concurrent TTS to avoid free-tier rate limits
+                val semaphore = Semaphore(2)
+                val results = coroutineScope {
+                    windows.mapIndexed { index, (text, range) ->
+                        async(Dispatchers.IO) {
+                            semaphore.withPermit {
+                                val truncated = if (text.length > 1500) text.take(1500) else text
+                                val resp = voxTubeApi.textToSpeech(
+                                    TTSRequest(text = truncated, voice = voice)
+                                )
+                                val audio = if (resp.isSuccessful) resp.body()?.audio_base64 else null
+                                DubChunk(
+                                    text = truncated,
+                                    startSec = range.first,
+                                    endSec = range.second,
+                                    audioBase64 = audio
+                                ).also {
+                                    _dubbingStatus.postValue(
+                                        "TTS ${index + 1}/${windows.size}…"
+                                    )
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+
+                val ok = results.count { it.audioBase64 != null }
+                if (ok == 0) {
+                    _error.value = "هیچ بخش صوتی ساخته نشد"
                     return@launch
                 }
 
-                val fullText = transcript.joinToString(" ") { it.text }
-                val truncatedText = if (fullText.length > 2000) fullText.take(2000) else fullText
-
-                _dubbingStatus.value = "در حال ساخت صدای فارسی..."
-
-                val ttsResponse = voxTubeApi.textToSpeech(
-                    TTSRequest(text = truncatedText, voice = "Charon")
-                )
-
-                if (ttsResponse.isSuccessful) {
-                    _audioBase64.value = ttsResponse.body()?.audio_base64
-                } else {
-                    _error.value = "خطا در ساخت صدا"
-                }
-
+                _chunks.value = results
+                _dubbingStatus.value = "آماده — $ok بخش صوتی. پخش همگام شروع می‌شود."
             } catch (e: Exception) {
-                _error.value = "خطای شبکه: ${e.message}"
+                _error.value = "خطا: ${e.message}"
+            } finally {
+                _isPreparing.value = false
             }
         }
+    }
+
+    fun clearDubbing() {
+        _chunks.value = null
+        _dubbingStatus.value = ""
+        _error.value = null
     }
 }
