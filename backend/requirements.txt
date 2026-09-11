@@ -5,3 +5,4 @@ google-genai==1.14.0
 pydantic==2.10.4
 requests==2.32.3
 PySocks==1.7.1
+yt-dlp==2025.1.26
