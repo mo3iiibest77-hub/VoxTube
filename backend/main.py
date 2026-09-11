@@ -2,7 +2,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
+from youtube_transcript_api._errors import (
+    TranscriptsDisabled,
+    NoTranscriptFound,
+    VideoUnavailable,
+    CouldNotRetrieveTranscript,
+)
 from google import genai
 from google.genai import types
 import re
@@ -14,7 +19,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voxtube")
 
-app = FastAPI(title="VoxTube Backend", version="0.2.0")
+app = FastAPI(title="VoxTube Backend", version="0.2.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,7 +32,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 TTS_MODEL = os.environ.get("TTS_MODEL", "gemini-2.5-flash-preview-tts")
 DEFAULT_VOICE = os.environ.get("TTS_VOICE", "Charon")
 
-# Official prebuilt voices (Gemini TTS)
 VALID_VOICES = {
     "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
     "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
@@ -54,9 +58,9 @@ class TTSRequest(BaseModel):
 
 def extract_video_id(url: str) -> str:
     patterns = [
-        r"(?:v=|\/)([0-9A-Za-z_-]{11}).*",
-        r"(?:youtu\.be\/)([0-9A-Za-z_-]{11})",
-        r"(?:embed\/)([0-9A-Za-z_-]{11})",
+        r"(?:v=|/)([0-9A-Za-z_-]{11}).*",
+        r"(?:youtu\.be/)([0-9A-Za-z_-]{11})",
+        r"(?:embed/)([0-9A-Za-z_-]{11})",
         r"^([0-9A-Za-z_-]{11})$",
     ]
     for pattern in patterns:
@@ -67,7 +71,6 @@ def extract_video_id(url: str) -> str:
 
 
 def pcm_to_wav(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, sample_width: int = 2) -> bytes:
-    """Wrap raw PCM (L16) in a minimal WAV header so Android MediaPlayer can play it."""
     data_size = len(pcm_data)
     byte_rate = sample_rate * channels * sample_width
     block_align = channels * sample_width
@@ -78,8 +81,8 @@ def pcm_to_wav(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, sam
         chunk_size,
         b"WAVE",
         b"fmt ",
-        16,  # PCM fmt chunk size
-        1,  # audio format = PCM
+        16,
+        1,
         channels,
         sample_rate,
         byte_rate,
@@ -91,11 +94,75 @@ def pcm_to_wav(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1, sam
     return header + pcm_data
 
 
+def _entry_to_dict(entry) -> dict:
+    """Support both dict-style and object-style transcript entries."""
+    if isinstance(entry, dict):
+        return {
+            "text": entry.get("text", ""),
+            "start": float(entry.get("start", 0)),
+            "duration": float(entry.get("duration", 0)),
+        }
+    return {
+        "text": getattr(entry, "text", "") or "",
+        "start": float(getattr(entry, "start", 0) or 0),
+        "duration": float(getattr(entry, "duration", 0) or 0),
+    }
+
+
+def fetch_transcript(video_id: str) -> list:
+    """Try several strategies to get captions."""
+    preferred = ["fa", "en", "en-US", "en-GB"]
+
+    # 1) Direct preferred languages
+    try:
+        raw = YouTubeTranscriptApi.get_transcript(video_id, languages=preferred)
+        items = [_entry_to_dict(e) for e in raw]
+        if items:
+            return items
+    except NoTranscriptFound:
+        pass
+    except TranscriptsDisabled:
+        raise
+    except Exception as e:
+        logger.warning("get_transcript preferred failed: %s", e)
+
+    # 2) List all and pick best
+    try:
+        listing = YouTubeTranscriptApi.list_transcripts(video_id)
+        # manual preferred first
+        for code in preferred:
+            try:
+                t = listing.find_transcript([code])
+                raw = t.fetch()
+                items = [_entry_to_dict(e) for e in raw]
+                if items:
+                    return items
+            except Exception:
+                continue
+        # any generated/manual
+        for t in listing:
+            try:
+                raw = t.fetch()
+                items = [_entry_to_dict(e) for e in raw]
+                if items:
+                    return items
+            except Exception as e:
+                logger.warning("fetch transcript %s failed: %s", getattr(t, "language_code", "?"), e)
+                continue
+    except TranscriptsDisabled:
+        raise
+    except Exception as e:
+        logger.warning("list_transcripts failed: %s", e)
+        raise
+
+    raise NoTranscriptFound(video_id)
+
+
 @app.get("/")
 def root():
     return {
         "status": "VoxTube backend running",
-        "version": "0.2.0",
+        "version": "0.2.1",
         "tts_model": TTS_MODEL,
         "gemini_configured": bool(GEMINI_API_KEY),
     }
@@ -114,32 +181,37 @@ def get_transcript(req: TranscriptRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["fa", "en"])
-    except NoTranscriptFound:
-        try:
-            # any available language as last resort
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-            transcript = transcript_list.find_transcript(
-                [t.language_code for t in transcript_list]
-            ).fetch()
-        except Exception as e:
-            raise HTTPException(status_code=404, detail=f"No transcript found: {e}")
+        transcript = fetch_transcript(video_id)
     except TranscriptsDisabled:
-        raise HTTPException(status_code=403, detail="Transcripts disabled for this video")
+        raise HTTPException(
+            status_code=403,
+            detail="زیرنویس برای این ویدیو غیرفعال است",
+        )
+    except NoTranscriptFound:
+        raise HTTPException(
+            status_code=404,
+            detail="زیرنویسی برای این ویدیو پیدا نشد",
+        )
+    except VideoUnavailable:
+        raise HTTPException(status_code=404, detail="ویدیو در دسترس نیست")
+    except CouldNotRetrieveTranscript as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"یوتیوب زیرنویس را برنگرداند (ممکن است IP سرور بلاک باشد): {e}",
+        )
     except Exception as e:
         logger.exception("transcript failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        msg = str(e)
+        if "no element found" in msg.lower() or "ParseError" in msg:
+            raise HTTPException(
+                status_code=502,
+                detail="یوتیوب پاسخ خالی داد — IP سرور احتمالاً توسط یوتیوب محدود شده",
+            )
+        raise HTTPException(status_code=500, detail=msg)
 
     return {
         "video_id": video_id,
-        "transcript": [
-            {
-                "text": entry["text"],
-                "start": entry["start"],
-                "duration": entry["duration"],
-            }
-            for entry in transcript
-        ],
+        "transcript": transcript,
     }
 
 
@@ -152,7 +224,6 @@ def text_to_speech(req: TTSRequest):
 
     try:
         client = get_client()
-        # Prompt helps natural Persian narration when input is Persian
         prompt = (
             "Speak the following text clearly and naturally. "
             "If the text is Persian, use a natural Persian accent and pacing.\n\n"
@@ -181,7 +252,6 @@ def text_to_speech(req: TTSRequest):
         raw = part.inline_data.data
         mime = (part.inline_data.mime_type or "").lower()
 
-        # Gemini often returns raw L16 PCM; wrap as WAV for Android
         if "l16" in mime or "pcm" in mime or mime == "" or not mime.startswith("audio/wav"):
             audio_bytes = pcm_to_wav(raw)
             out_mime = "audio/wav"
